@@ -1,10 +1,8 @@
-from flask import Flask, render_template, request, jsonify
+from http.server import BaseHTTPRequestHandler
+import json
 import mido
 import io
-from werkzeug.utils import secure_filename
-
-app = Flask(__name__, template_folder='../templates')
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
+from urllib.parse import parse_qs
 
 def get_note_length(ticks, ticks_per_beat):
     """MIDI 틱을 MML 음표 길이로 변환"""
@@ -109,29 +107,47 @@ def midi_to_mml(midi_data):
     
     return result
 
-@app.route('/', methods=['GET'])
-def index():
-    return render_template('index.html')
-
-@app.route('/api/convert', methods=['POST'])
-def convert():
-    if 'file' not in request.files:
-        return jsonify({'error': '파일이 없습니다'}), 400
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            # Content-Length 헤더에서 데이터 크기 가져오기
+            content_length = int(self.headers['Content-Length'])
+            
+            # 요청 본문 읽기
+            post_data = self.rfile.read(content_length)
+            
+            # multipart/form-data 처리
+            if 'multipart/form-data' in self.headers.get('Content-Type', ''):
+                # 파일 데이터 추출 (간단한 구현)
+                # 실제로는 더 복잡한 multipart 파싱이 필요할 수 있음
+                file_start = post_data.find(b'\r\n\r\n') + 4
+                file_end = post_data.rfind(b'\r\n-')
+                midi_data = post_data[file_start:file_end]
+                
+                # MIDI to MML 변환
+                result = midi_to_mml(midi_data)
+                
+                # 응답 전송
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+            else:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': '잘못된 요청 형식입니다.'}).encode())
+                
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
     
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': '선택된 파일이 없습니다'}), 400
-    
-    if not file.filename.endswith('.mid'):
-        return jsonify({'error': 'MIDI 파일만 업로드 가능합니다'}), 400
-    
-    try:
-        # 파일 데이터를 직접 메모리에서 처리
-        midi_data = file.read()
-        result = midi_to_mml(midi_data)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': f'변환 중 오류가 발생했습니다: {str(e)}'}), 500
-
-# Vercel의 서버리스 함수를 위한 handler
-app.debug = False 
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers() 
