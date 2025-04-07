@@ -114,6 +114,27 @@
             font-size: 0.9em;
             margin-top: 5px;
         }
+        .play-btn {
+            background-color: #9C27B0;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        .play-btn:hover {
+            background-color: #7B1FA2;
+        }
+        .play-btn.playing {
+            background-color: #FF5722;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -133,19 +154,28 @@
                 <h3>멜로디</h3>
                 <div id="melodyText" class="mml-text"></div>
                 <div class="char-count">글자 수: <span id="melodyCount">0</span>/1200</div>
-                <button class="copy-btn" onclick="copyToClipboard('melodyText')">복사</button>
+                <div class="button-group">
+                    <button class="copy-btn" onclick="copyToClipboard('melodyText')">복사</button>
+                    <button class="play-btn" onclick="playMML('melodyText', this)">재생</button>
+                </div>
             </div>
             <div id="harmony1Section" class="result-section">
                 <h3>화음 1</h3>
                 <div id="harmony1Text" class="mml-text"></div>
                 <div class="char-count">글자 수: <span id="harmony1Count">0</span>/1200</div>
-                <button class="copy-btn" onclick="copyToClipboard('harmony1Text')">복사</button>
+                <div class="button-group">
+                    <button class="copy-btn" onclick="copyToClipboard('harmony1Text')">복사</button>
+                    <button class="play-btn" onclick="playMML('harmony1Text', this)">재생</button>
+                </div>
             </div>
             <div id="harmony2Section" class="result-section">
                 <h3>화음 2</h3>
                 <div id="harmony2Text" class="mml-text"></div>
                 <div class="char-count">글자 수: <span id="harmony2Count">0</span>/1200</div>
-                <button class="copy-btn" onclick="copyToClipboard('harmony2Text')">복사</button>
+                <div class="button-group">
+                    <button class="copy-btn" onclick="copyToClipboard('harmony2Text')">복사</button>
+                    <button class="play-btn" onclick="playMML('harmony2Text', this)">재생</button>
+                </div>
             </div>
         </div>
     </div>
@@ -276,6 +306,256 @@
                 });
             }
         });
+
+        // MML 재생을 위한 Audio Context
+        let audioContext = null;
+        const noteFrequencies = {
+            'c': 261.63, 'c+': 277.18, 'd-': 277.18, 'd': 293.66, 'd+': 311.13, 'e-': 311.13,
+            'e': 329.63, 'f': 349.23, 'f+': 369.99, 'g-': 369.99, 'g': 392.00, 
+            'g+': 415.30, 'a-': 415.30, 'a': 440.00, 'a+': 466.16, 'b-': 466.16, 'b': 493.88
+        };
+
+        function createAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return audioContext;
+        }
+
+        function playNote(frequency, duration, time, volume = 0.5) {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.value = frequency;
+            
+            // 볼륨 설정 (0-15 스케일을 0-1로 변환)
+            const actualVolume = Math.min(volume, 1.0);
+            
+            gainNode.gain.setValueAtTime(actualVolume, time);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, time + duration - 0.05);
+            
+            oscillator.start(time);
+            oscillator.stop(time + duration);
+            
+            return time + duration; // 다음 노트의 시작 시간 반환
+        }
+
+        let isPlaying = false;
+        let currentPlayButton = null;
+        let stopPlayback = false;
+
+        async function playMML(elementId, button) {
+            if (isPlaying) {
+                stopPlayback = true;
+                isPlaying = false;
+                if (currentPlayButton) {
+                    currentPlayButton.textContent = '재생';
+                    currentPlayButton.classList.remove('playing');
+                }
+                if (audioContext) {
+                    await audioContext.close();
+                    audioContext = null;
+                }
+                return;
+            }
+
+            const mml = document.getElementById(elementId).textContent;
+            createAudioContext();
+            
+            isPlaying = true;
+            stopPlayback = false;
+            currentPlayButton = button;
+            button.textContent = '정지';
+            button.classList.add('playing');
+
+            let time = audioContext.currentTime;
+            let defaultDuration = 0.25; // 기본 음표 길이 (4분음표)
+            let currentLength = 8; // 기본 L 값 (8분음표)
+            let currentOctave = 4;
+            let currentVolume = 0.5;
+            let tempo = 120; // 기본 템포
+            let i = 0;
+            
+            // MML 파싱 및 재생
+            while (i < mml.length && !stopPlayback) {
+                let char = mml[i].toLowerCase();
+                i++;
+                
+                // 템포 처리 (T120 등)
+                if (char === 't') {
+                    let tempoStr = '';
+                    while (i < mml.length && /[0-9]/.test(mml[i])) {
+                        tempoStr += mml[i];
+                        i++;
+                    }
+                    if (tempoStr) {
+                        tempo = parseInt(tempoStr);
+                        // 템포에 따라 음표 길이 조정 (BPM)
+                        defaultDuration = 60 / tempo;
+                    }
+                    continue;
+                }
+                
+                // 옥타브 변경 (O4 등)
+                if (char === 'o') {
+                    let octaveStr = '';
+                    while (i < mml.length && /[0-9]/.test(mml[i])) {
+                        octaveStr += mml[i];
+                        i++;
+                    }
+                    if (octaveStr) {
+                        currentOctave = parseInt(octaveStr);
+                    }
+                    continue;
+                }
+                
+                // 옥타브 올림/내림 (> 또는 <)
+                if (char === '>') {
+                    currentOctave++;
+                    continue;
+                }
+                if (char === '<') {
+                    currentOctave--;
+                    continue;
+                }
+                
+                // 음표 길이 설정 (L8 등)
+                if (char === 'l') {
+                    let lengthStr = '';
+                    while (i < mml.length && (/[0-9]/.test(mml[i]) || mml[i] === '.')) {
+                        lengthStr += mml[i];
+                        i++;
+                    }
+                    if (lengthStr) {
+                        // 점음표 처리
+                        if (lengthStr.includes('.')) {
+                            const baseLength = parseInt(lengthStr.replace('.', ''));
+                            currentLength = baseLength;
+                            // 음표 길이 계산 (점음표는 1.5배)
+                            const noteDuration = defaultDuration * (4 / baseLength) * 1.5;
+                            defaultDuration = noteDuration / 4; // 4분음표 기준으로 저장
+                        } else {
+                            currentLength = parseInt(lengthStr);
+                            defaultDuration = 60 / tempo * (4 / currentLength);
+                        }
+                    }
+                    continue;
+                }
+                
+                // 볼륨 설정 (V13 등)
+                if (char === 'v') {
+                    let volumeStr = '';
+                    while (i < mml.length && /[0-9]/.test(mml[i])) {
+                        volumeStr += mml[i];
+                        i++;
+                    }
+                    if (volumeStr) {
+                        const volumeLevel = parseInt(volumeStr);
+                        // 볼륨 스케일 변환 (1-15 -> 0.0-1.0)
+                        currentVolume = Math.min(volumeLevel / 15, 1.0);
+                    }
+                    continue;
+                }
+                
+                // 음표 또는 쉼표 처리
+                if (/[a-g]/.test(char) || char === 'r') {
+                    let noteName = char;
+                    let noteDuration = defaultDuration * (4 / currentLength);
+                    let isRest = (char === 'r');
+                    
+                    // 임시표 처리 (+/-)
+                    if (!isRest && i < mml.length && (mml[i] === '+' || mml[i] === '-')) {
+                        noteName += mml[i];
+                        i++;
+                    }
+                    
+                    // 음표 길이 명시적 설정
+                    let lengthStr = '';
+                    while (i < mml.length && (/[0-9]/.test(mml[i]) || mml[i] === '.')) {
+                        lengthStr += mml[i];
+                        i++;
+                    }
+                    
+                    if (lengthStr) {
+                        if (lengthStr.includes('.')) {
+                            // 점음표 처리
+                            const baseLength = parseInt(lengthStr.replace('.', ''));
+                            noteDuration = (60 / tempo) * (4 / baseLength) * 1.5;
+                        } else {
+                            noteDuration = (60 / tempo) * (4 / parseInt(lengthStr));
+                        }
+                    }
+                    
+                    // 타이 노트 처리
+                    if (i < mml.length && mml[i] === '&') {
+                        i++;
+                        // 다음 음표를 찾아 길이 합산
+                        let nextChar = i < mml.length ? mml[i].toLowerCase() : '';
+                        if (/[a-g]/.test(nextChar) && nextChar === noteName[0]) {
+                            i++;
+                            // 임시표 처리
+                            if (i < mml.length && (mml[i] === '+' || mml[i] === '-')) {
+                                if ((noteName.length > 1 && noteName[1] === mml[i]) ||
+                                    (noteName.length === 1)) {
+                                    i++;
+                                }
+                            }
+                            
+                            // 다음 음표의 길이 계산
+                            let nextLengthStr = '';
+                            while (i < mml.length && (/[0-9]/.test(mml[i]) || mml[i] === '.')) {
+                                nextLengthStr += mml[i];
+                                i++;
+                            }
+                            
+                            if (nextLengthStr) {
+                                let nextDuration;
+                                if (nextLengthStr.includes('.')) {
+                                    const baseLength = parseInt(nextLengthStr.replace('.', ''));
+                                    nextDuration = (60 / tempo) * (4 / baseLength) * 1.5;
+                                } else {
+                                    nextDuration = (60 / tempo) * (4 / parseInt(nextLengthStr));
+                                }
+                                noteDuration += nextDuration;
+                            } else {
+                                noteDuration += defaultDuration * (4 / currentLength);
+                            }
+                        }
+                    }
+                    
+                    // 음표 재생
+                    if (!isRest) {
+                        // 낮은 c는 c1, 높은 c는 c5 등으로 표현
+                        const frequency = noteFrequencies[noteName] * Math.pow(2, currentOctave - 4);
+                        time = playNote(frequency, noteDuration, time, currentVolume);
+                    } else {
+                        // 쉼표는 시간만 진행
+                        time += noteDuration;
+                    }
+                    
+                    // UI 업데이트를 위한 짧은 대기
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                    continue;
+                }
+            }
+
+            // 재생 완료
+            if (!stopPlayback) {
+                await new Promise(resolve => setTimeout(resolve, 500)); // 마지막 음표가 끝날 때까지 대기
+            }
+            
+            isPlaying = false;
+            stopPlayback = false;
+            if (currentPlayButton) {
+                currentPlayButton.textContent = '재생';
+                currentPlayButton.classList.remove('playing');
+                currentPlayButton = null;
+            }
+        }
     </script>
 </body>
 </html> 
