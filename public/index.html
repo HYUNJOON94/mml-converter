@@ -29,10 +29,35 @@
             margin: 20px 0;
         }
         .file-input {
-            padding: 10px;
+            padding: 20px;
             border: 2px dashed #ccc;
             border-radius: 4px;
             text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        .file-input.drag-over {
+            background-color: #e3f2fd;
+            border-color: #2196F3;
+        }
+        .file-input input[type="file"] {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .file-input p {
+            margin: 0;
+            color: #666;
+        }
+        .file-input .selected-file {
+            margin-top: 10px;
+            color: #2196F3;
+            display: none;
         }
         .submit-btn {
             background-color: #4CAF50;
@@ -95,9 +120,10 @@
     <div class="container">
         <h1>준박's MIDI to MML 변환기</h1>
         <form class="upload-form" id="uploadForm">
-            <div class="file-input">
+            <div class="file-input" id="dropZone">
                 <input type="file" id="midiFile" accept=".mid" required>
-                <p>MIDI 파일을 선택하세요 (.mid)</p>
+                <p>MIDI 파일을 선택하거나 여기에 드래그하세요 (.mid)</p>
+                <p class="selected-file" id="selectedFileName"></p>
             </div>
             <button type="submit" class="submit-btn">변환하기</button>
         </form>
@@ -137,6 +163,68 @@
             });
         }
 
+        // 파일 드래그 앤 드롭 처리
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('midiFile');
+        const selectedFileName = document.getElementById('selectedFileName');
+
+        // 파일이 선택되었을 때 파일 이름 표시
+        function updateFileName(file) {
+            if (file) {
+                selectedFileName.textContent = `선택된 파일: ${file.name}`;
+                selectedFileName.style.display = 'block';
+            } else {
+                selectedFileName.style.display = 'none';
+            }
+        }
+
+        fileInput.addEventListener('change', (e) => {
+            updateFileName(e.target.files[0]);
+        });
+
+        // 드래그 앤 드롭 이벤트 처리
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight(e) {
+            dropZone.classList.add('drag-over');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('drag-over');
+        }
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const file = dt.files[0];
+
+            if (file && file.name.endsWith('.mid')) {
+                fileInput.files = dt.files;
+                updateFileName(file);
+            } else {
+                const errorDiv = document.getElementById('error');
+                errorDiv.textContent = 'MIDI 파일(.mid)만 업로드 가능합니다.';
+                errorDiv.style.display = 'block';
+            }
+        }
+
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const fileInput = document.getElementById('midiFile');
@@ -152,13 +240,14 @@
             formData.append('file', fileInput.files[0]);
 
             try {
-                const response = await fetch('/convert', {
+                const response = await fetch('/api/convert', {
                     method: 'POST',
                     body: formData
                 });
 
                 if (!response.ok) {
-                    throw new Error(await response.text());
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || '변환 중 오류가 발생했습니다.');
                 }
 
                 const result = await response.json();
