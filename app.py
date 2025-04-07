@@ -1,19 +1,13 @@
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, jsonify
 import mido
-import os
+import io
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
-
-# 업로드 폴더가 없으면 생성
-if not os.path.exists(app.config['UPLOAD_FOLDER']):
-    os.makedirs(app.config['UPLOAD_FOLDER'])
 
 def get_note_length(ticks, ticks_per_beat):
     """MIDI 틱을 MML 음표 길이로 변환"""
-    # 기본적으로 4분음표를 1로 간주
     relative_length = ticks / ticks_per_beat
     if relative_length >= 2:  # 2분음표 이상
         return '2'
@@ -77,9 +71,11 @@ def process_track(track, ticks_per_beat):
     
     return ''.join(mml)  # 공백 없이 모든 요소를 연결
 
-def midi_to_mml(midi_file):
-    """MIDI 파일을 멜로디/화음1/화음2로 나누어 MML로 변환"""
-    mid = mido.MidiFile(midi_file)
+def midi_to_mml(midi_data):
+    """MIDI 데이터를 멜로디/화음1/화음2로 나누어 MML로 변환"""
+    # 바이트 데이터를 파일 객체로 변환
+    midi_file = io.BytesIO(midi_data)
+    mid = mido.MidiFile(file=midi_file)
     tempo = 120  # 기본 템포
     
     # 템포 정보 찾기
@@ -120,27 +116,22 @@ def index():
 @app.route('/convert', methods=['POST'])
 def convert():
     if 'file' not in request.files:
-        return '파일이 없습니다', 400
+        return jsonify({'error': '파일이 없습니다'}), 400
     
     file = request.files['file']
     if file.filename == '':
-        return '선택된 파일이 없습니다', 400
+        return jsonify({'error': '선택된 파일이 없습니다'}), 400
     
     if not file.filename.endswith('.mid'):
-        return 'MIDI 파일만 업로드 가능합니다', 400
-    
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
+        return jsonify({'error': 'MIDI 파일만 업로드 가능합니다'}), 400
     
     try:
-        result = midi_to_mml(filepath)
-        os.remove(filepath)  # 변환 후 파일 삭제
+        # 파일 데이터를 직접 메모리에서 처리
+        midi_data = file.read()
+        result = midi_to_mml(midi_data)
         return jsonify(result)
     except Exception as e:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        return f'변환 중 오류가 발생했습니다: {str(e)}', 500
+        return jsonify({'error': f'변환 중 오류가 발생했습니다: {str(e)}'}), 500
 
-if __name__ == '__main__':
-    app.run(debug=True) 
+# Vercel의 서버리스 함수를 위한 handler
+app.debug = False 
